@@ -1,65 +1,79 @@
+import os
 import pandas as pd
 from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.model_selection import train_test_split
+import mysql.connector
 from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
-# Load the filtered ratings dataset
-filtered_ratings_df = pd.read_csv("data/final_filtered_ratings.csv")  
+def load_data_from_db():
+    """Load the ratings dataset from the MySQL database."""
+    db_host = os.getenv('DB_HOST')
+    db_user = os.getenv('DB_USER')
+    db_password = os.getenv('DB_PASSWORD')
+    db_name = os.getenv('DB_NAME')
+    db_port = os.getenv('DB_PORT')
 
-# Step 1: Split the dataset into training and testing sets
-train_df, test_df = train_test_split(filtered_ratings_df, test_size=0.2, random_state=42)
+    connection = mysql.connector.connect(
+        host=db_host,
+        user=db_user,
+        password=db_password,
+        database=db_name,
+        port=db_port
+    )
 
-# Step 2: Create a user-item matrix from the training data
-user_item_matrix_train = train_df.pivot(index='userId', columns='productId', values='rating').fillna(0)
+    query = "SELECT user_id, product_id, score FROM ratings"
+    df = pd.read_sql(query, connection)
+    connection.close()
+    return df
 
-# Step 3: Calculate similarity between users using cosine similarity
+def train_model(filtered_ratings_df):
+    """Train the model by calculating user similarities."""
+    train_df, _ = train_test_split(filtered_ratings_df, test_size=0.2, random_state=42)
+    user_item_matrix_train = train_df.pivot(index='user_id', columns='product_id', values='score').fillna(0)
+    user_similarity_df = calculate_user_similarity(user_item_matrix_train)
+
+    # Save the user similarity DataFrame to a CSV file
+    user_similarity_df.to_csv("data/user_similarity.csv")
+    print("User similarity data saved successfully.")
+
 def calculate_user_similarity(user_item_matrix):
     """Calculate cosine similarity between users."""
     user_similarity = cosine_similarity(user_item_matrix)
     return pd.DataFrame(user_similarity, index=user_item_matrix.index, columns=user_item_matrix.index)
 
-# Calculate user similarity for the training data
-user_similarity_df = calculate_user_similarity(user_item_matrix_train)
+def get_user_recommendations(user_id, top_n=20):
+    """Generate item recommendations for a specific user based on user similarities."""
+    user_similarity_df = pd.read_csv("data/user_similarity.csv", index_col=0)
+    filtered_ratings_df = load_data_from_db()
+    
+    similar_users = user_similarity_df[user_id].sort_values(ascending=False).head(top_n).index
+    recommendations = filtered_ratings_df[filtered_ratings_df['user_id'].isin(similar_users)]
+    
+    product_scores = recommendations.groupby('product_id')['score'].mean()
+    top_recommendations = product_scores.sort_values(ascending=False).head(top_n)
 
-# Save the user similarity DataFrame to a CSV file
-user_similarity_df.to_csv("data/user_similarity.csv")
-print("User similarity data saved successfully.")
+    return top_recommendations
 
-# Function to get recommendations
-def get_recommendations(user_id, user_similarity_df, user_item_matrix_train, top_n=20):
-    if user_id not in user_similarity_df.index:
-        return None  # Return None if user_id is not in the similarity DataFrame
-
-    # Get similarity scores and user's ratings
-    similar_users = user_similarity_df[user_id].sort_values(ascending=False)
-    user_ratings = user_item_matrix_train.loc[user_id]
-
-    # Create a recommendation score for each item
-    recommendation_scores = pd.Series(0, index=user_item_matrix_train.columns)
-
-    for similar_user, similarity_score in similar_users.items():
-        if similar_user != user_id:
-            # Add weighted ratings of similar users
-            recommendation_scores += similarity_score * user_item_matrix_train.loc[similar_user]
-
-    # Remove items already rated by the user
-    recommendation_scores = recommendation_scores[user_ratings == 0]
-
-    # Sort recommendations by score and return the top N items
-    return recommendation_scores.sort_values(ascending=False).head(top_n)
-
-# API endpoint for recommendations
-@app.route('/recommend', methods=['GET'])
+@app.route('/recommendations', methods=['GET'])
 def recommend():
-    user_id = request.args.get('user_id', type=int)  # Expect user_id as query parameter
-    recommendations = get_recommendations(user_id, user_similarity_df, user_item_matrix_train, top_n=20)
+    """Get item recommendations for a specific user ID."""
+    user_id = request.args.get('user_id')  # Fetch user_id as a string
 
-    if recommendations is not None and not recommendations.empty:
-        return jsonify(recommendations.to_dict()), 200  # Return recommendations as JSON
-    else:
-        return jsonify({"message": f"No recommendations available for User {user_id}."}), 404
+    if user_id is None:
+        return jsonify({"error": "User ID is required."}), 400
 
+    try:
+        filtered_ratings_df = load_data_from_db()
+        train_model(filtered_ratings_df)
+
+        recommendations = get_user_recommendations(user_id)
+
+        recommendations_dict = recommendations.to_dict()
+
+        return jsonify({"user_id": user_id, "recommendations": recommendations_dict}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(debug=True,port=5001)
