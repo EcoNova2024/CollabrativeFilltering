@@ -29,19 +29,32 @@ def load_data_from_db():
     return df
 
 def train_model(filtered_ratings_df):
-    """Train the model by calculating user similarities."""
+    """Train the model by calculating user and item similarities."""
     train_df, _ = train_test_split(filtered_ratings_df, test_size=0.2, random_state=42)
+    
+    # User-Item Matrix
     user_item_matrix_train = train_df.pivot(index='user_id', columns='product_id', values='score').fillna(0)
+    
+    # User Similarity Matrix
     user_similarity_df = calculate_user_similarity(user_item_matrix_train)
-
-    # Save the user similarity DataFrame to a CSV file
+    
+    # Item Similarity Matrix
+    item_similarity_df = calculate_item_similarity(user_item_matrix_train)
+    
+    # Save similarity matrices to CSV files
     user_similarity_df.to_csv("data/user_similarity.csv")
-    print("User similarity data saved successfully.")
+    item_similarity_df.to_csv("data/item_similarity.csv")
+    print("User and Item similarity data saved successfully.")
 
 def calculate_user_similarity(user_item_matrix):
     """Calculate cosine similarity between users."""
     user_similarity = cosine_similarity(user_item_matrix)
     return pd.DataFrame(user_similarity, index=user_item_matrix.index, columns=user_item_matrix.index)
+
+def calculate_item_similarity(user_item_matrix):
+    """Calculate cosine similarity between items (products)."""
+    item_similarity = cosine_similarity(user_item_matrix.T)
+    return pd.DataFrame(item_similarity, index=user_item_matrix.columns, columns=user_item_matrix.columns)
 
 def get_user_recommendations(user_id, top_n=20):
     """Generate item recommendations for a specific user based on user similarities."""
@@ -56,24 +69,50 @@ def get_user_recommendations(user_id, top_n=20):
 
     return top_recommendations
 
+def get_item_recommendations(product_id, top_n=20):
+    """Generate recommendations for a product based on item-item similarities."""
+    item_similarity_df = pd.read_csv("data/item_similarity.csv", index_col=0)
+    
+    # Get the most similar items to the given product
+    similar_items = item_similarity_df[product_id].sort_values(ascending=False).head(top_n).index
+    
+    return similar_items
+
 @app.route('/recommendations', methods=['GET'])
 def recommend():
-    """Get item recommendations for a specific user ID."""
+    """Get item recommendations for a specific user or item."""
     user_id = request.args.get('user_id')  # Fetch user_id as a string
+    product_id = request.args.get('product_id')  # Fetch product_id if provided
+    
+    if user_id:
+        # Generate recommendations based on user similarities
+        try:
+            filtered_ratings_df = load_data_from_db()
+            train_model(filtered_ratings_df)
+            recommendations = get_user_recommendations(user_id)
 
-    if user_id is None:
-        return jsonify({"error": "User ID is required."}), 400
+            recommendations_dict = recommendations.to_dict()
 
-    try:
-        filtered_ratings_df = load_data_from_db()
-        train_model(filtered_ratings_df)
+            return jsonify({"user_id": user_id, "recommendations": recommendations_dict}), 200
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+    
+    elif product_id:
+        # Generate recommendations based on item similarities
+        try:
+            filtered_ratings_df = load_data_from_db()
+            train_model(filtered_ratings_df)
+            similar_items = get_item_recommendations(product_id)
 
-        recommendations = get_user_recommendations(user_id)
+            # Convert similar_items (list of product ids) to a map with similarity scores
+            item_similarity_df = pd.read_csv("data/item_similarity.csv", index_col=0)
+            similar_items_dict = {item: item_similarity_df[product_id][item] for item in similar_items}
 
-        recommendations_dict = recommendations.to_dict()
+            return jsonify({"product_id": product_id, "similar_items": similar_items_dict}), 200
+        except Exception as e:
+            return jsonify({"error": f"Error fetching item recommendations: {str(e)}"}), 500
+    else:
+        return jsonify({"error": "Either user_id or product_id is required."}), 400
 
-        return jsonify({"user_id": user_id, "recommendations": recommendations_dict}), 200
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
 if __name__ == '__main__':
-    app.run(debug=True,port=5001)
+    app.run(debug=True, port=5001)
