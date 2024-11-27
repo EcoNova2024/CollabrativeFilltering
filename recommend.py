@@ -41,9 +41,10 @@ def train_model(filtered_ratings_df):
     # Item Similarity Matrix
     item_similarity_df = calculate_item_similarity(user_item_matrix_train)
     
-    # Save similarity matrices to CSV files
-    user_similarity_df.to_csv("data/user_similarity.csv")
-    item_similarity_df.to_csv("data/item_similarity.csv")
+    # Save similarity matrices to CSV files in the script's directory
+    script_dir = os.path.dirname(os.path.abspath(__file__))  # Get the directory of the script
+    user_similarity_df.to_csv(os.path.join(script_dir, "data", "user_similarity.csv"))
+    item_similarity_df.to_csv(os.path.join(script_dir, "data", "item_similarity.csv"))
     print("User and Item similarity data saved successfully.")
 
 def calculate_user_similarity(user_item_matrix):
@@ -58,7 +59,8 @@ def calculate_item_similarity(user_item_matrix):
 
 def get_user_recommendations(user_id, top_n=20):
     """Generate item recommendations for a specific user based on user similarities."""
-    user_similarity_df = pd.read_csv("data/user_similarity.csv", index_col=0)
+    script_dir = os.path.dirname(os.path.abspath(__file__))  # Get the directory of the script
+    user_similarity_df = pd.read_csv(os.path.join(script_dir, "data", "user_similarity.csv"), index_col=0)
     filtered_ratings_df = load_data_from_db()
     
     similar_users = user_similarity_df[user_id].sort_values(ascending=False).head(top_n).index
@@ -71,7 +73,8 @@ def get_user_recommendations(user_id, top_n=20):
 
 def get_item_recommendations(product_id, top_n=20):
     """Generate recommendations for a product based on item-item similarities."""
-    item_similarity_df = pd.read_csv("data/item_similarity.csv", index_col=0)
+    script_dir = os.path.dirname(os.path.abspath(__file__))  # Get the directory of the script
+    item_similarity_df = pd.read_csv(os.path.join(script_dir, "data", "item_similarity.csv"), index_col=0)
     
     # Get the most similar items to the given product
     similar_items = item_similarity_df[product_id].sort_values(ascending=False).head(top_n).index
@@ -105,7 +108,8 @@ def recommend():
             similar_items = get_item_recommendations(product_id)
 
             # Convert similar_items (list of product ids) to a map with similarity scores
-            item_similarity_df = pd.read_csv("data/item_similarity.csv", index_col=0)
+            script_dir = os.path.dirname(os.path.abspath(__file__))  # Get the directory of the script
+            item_similarity_df = pd.read_csv(os.path.join(script_dir, "data", "item_similarity.csv"), index_col=0)
             similar_items_dict = {item: item_similarity_df[product_id][item] for item in similar_items}
 
             return jsonify({"product_id": product_id, "similar_items": similar_items_dict}), 200
